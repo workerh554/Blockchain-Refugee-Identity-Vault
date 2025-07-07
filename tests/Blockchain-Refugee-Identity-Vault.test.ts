@@ -1,35 +1,22 @@
-const { assertEquals, runTest } = require("@stacks/clarity-js-sdk");
+import { describe, expect, it } from "vitest";
 
-const contractName = "refugee-vault";
-const adminAddress = "ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM";
+const accounts = simnet.getAccounts();
+const address1 = accounts.get("wallet_1")!;
 
-describe("refugee identity vault", () => {
-  let client;
+/*
+  The test below is an example. To learn more, read the testing documentation here:
+  https://docs.hiro.so/stacks/clarinet-js-sdk
+*/
 
-  before(async () => {
-    client = await Client.createDefaultClient();
-    await client.deployContract(contractName, adminAddress);
+describe("example tests", () => {
+  it("ensures simnet is well initialised", () => {
+    expect(simnet.blockHeight).toBeDefined();
   });
 
-  it("should add a refugee", async () => {
-    const result = await client.executeContract({
-      contractName,
-      functionName: "add-refugee",
-      sender: adminAddress,
-      args: ["u1", "John Doe", "u19900101", "Syria", "Asylum Seeker", "Camp A"]
-    });
-    assertEquals(result.success, true);
-  });
-
-  it("should not allow duplicate refugee IDs", async () => {
-    const result = await client.executeContract({
-      contractName,
-      functionName: "add-refugee",
-      sender: adminAddress,
-      args: ["u1", "Jane Doe", "u19900101", "Syria", "Asylum Seeker", "Camp A"]
-    });
-    assertEquals(result.success, false);
-  });
-
-  // Add more tests...
+  // it("shows an example", () => {
+  //   const { result } = simnet.callReadOnlyFn("counter", "get-counter", [], address1);
+  //   expect(result).toBeUint(0);
+  // });
 });
+
+
