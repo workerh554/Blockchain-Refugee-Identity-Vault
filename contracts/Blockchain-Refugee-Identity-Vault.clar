@@ -542,3 +542,210 @@
         (is-issuer tx-sender)
     )
 )
+(define-constant err-insufficient-approvals (err u107))
+(define-constant err-already-approved (err u108))
+(define-constant err-approval-not-found (err u109))
+
+(define-data-var min-approvals-required uint u2)
+
+(define-map pending-documents
+    {
+        refugee-id: uint,
+        document-hash: (buff 32),
+        proposal-id: uint,
+    }
+    {
+        document-type: (string-ascii 30),
+        issue-date: uint,
+        expiry-date: uint,
+        issuing-authority: (string-ascii 50),
+        proposer: principal,
+        approvals-count: uint,
+        executed: bool,
+        timestamp: uint,
+    }
+)
+
+(define-map document-approvals
+    {
+        refugee-id: uint,
+        document-hash: (buff 32),
+        proposal-id: uint,
+        approver: principal,
+    }
+    { approved: bool }
+)
+
+(define-map proposal-counter
+    { refugee-id: uint }
+    { count: uint }
+)
+
+(define-public (propose-document
+        (refugee-id uint)
+        (document-hash (buff 32))
+        (document-type (string-ascii 30))
+        (issue-date uint)
+        (expiry-date uint)
+        (issuing-authority (string-ascii 50))
+    )
+    (let (
+            (current-count (default-to u0
+                (get count (map-get? proposal-counter { refugee-id: refugee-id }))
+            ))
+            (new-proposal-id (+ current-count u1))
+            (current-height burn-block-height)
+        )
+        (asserts! (is-authorized-issuer) err-unauthorized)
+        (asserts! (> expiry-date issue-date) err-invalid-date)
+        (asserts!
+            (is-none (map-get? pending-documents {
+                refugee-id: refugee-id,
+                document-hash: document-hash,
+                proposal-id: new-proposal-id,
+            }))
+            err-already-exists
+        )
+        (map-set proposal-counter { refugee-id: refugee-id } { count: new-proposal-id })
+        (ok (map-set pending-documents {
+            refugee-id: refugee-id,
+            document-hash: document-hash,
+            proposal-id: new-proposal-id,
+        } {
+            document-type: document-type,
+            issue-date: issue-date,
+            expiry-date: expiry-date,
+            issuing-authority: issuing-authority,
+            proposer: tx-sender,
+            approvals-count: u0,
+            executed: false,
+            timestamp: current-height,
+        }))
+    )
+)
+
+(define-public (approve-document
+        (refugee-id uint)
+        (document-hash (buff 32))
+        (proposal-id uint)
+    )
+    (let (
+            (pending-doc (unwrap!
+                (map-get? pending-documents {
+                    refugee-id: refugee-id,
+                    document-hash: document-hash,
+                    proposal-id: proposal-id,
+                })
+                err-not-found
+            ))
+            (existing-approval (map-get? document-approvals {
+                refugee-id: refugee-id,
+                document-hash: document-hash,
+                proposal-id: proposal-id,
+                approver: tx-sender,
+            }))
+        )
+        (asserts! (is-authorized-issuer) err-unauthorized)
+        (asserts! (not (get executed pending-doc)) err-already-exists)
+        (asserts! (is-none existing-approval) err-already-approved)
+        (map-set document-approvals {
+            refugee-id: refugee-id,
+            document-hash: document-hash,
+            proposal-id: proposal-id,
+            approver: tx-sender,
+        } { approved: true }
+        )
+        (ok (map-set pending-documents {
+            refugee-id: refugee-id,
+            document-hash: document-hash,
+            proposal-id: proposal-id,
+        }
+            (merge pending-doc { approvals-count: (+ (get approvals-count pending-doc) u1) })
+        ))
+    )
+)
+
+(define-public (execute-document-proposal
+        (refugee-id uint)
+        (document-hash (buff 32))
+        (proposal-id uint)
+    )
+    (let (
+            (pending-doc (unwrap!
+                (map-get? pending-documents {
+                    refugee-id: refugee-id,
+                    document-hash: document-hash,
+                    proposal-id: proposal-id,
+                })
+                err-not-found
+            ))
+            (current-height burn-block-height)
+            (min-required (var-get min-approvals-required))
+        )
+        (asserts! (is-authorized-issuer) err-unauthorized)
+        (asserts! (not (get executed pending-doc)) err-already-exists)
+        (asserts! (>= (get approvals-count pending-doc) min-required)
+            err-insufficient-approvals
+        )
+        (map-set pending-documents {
+            refugee-id: refugee-id,
+            document-hash: document-hash,
+            proposal-id: proposal-id,
+        }
+            (merge pending-doc { executed: true })
+        )
+        (ok (map-set document-registry {
+            refugee-id: refugee-id,
+            document-hash: document-hash,
+        } {
+            document-type: (get document-type pending-doc),
+            issue-date: (get issue-date pending-doc),
+            expiry-date: (get expiry-date pending-doc),
+            issuing-authority: (get issuing-authority pending-doc),
+            status: "active",
+            renewal-required: false,
+            last-updated: current-height,
+        }))
+    )
+)
+
+(define-public (set-approval-threshold (new-threshold uint))
+    (begin
+        (asserts! (is-eq tx-sender (var-get admin)) err-owner-only)
+        (asserts! (> new-threshold u0) err-invalid-date)
+        (ok (var-set min-approvals-required new-threshold))
+    )
+)
+
+(define-read-only (get-pending-document
+        (refugee-id uint)
+        (document-hash (buff 32))
+        (proposal-id uint)
+    )
+    (map-get? pending-documents {
+        refugee-id: refugee-id,
+        document-hash: document-hash,
+        proposal-id: proposal-id,
+    })
+)
+
+(define-read-only (has-approved
+        (refugee-id uint)
+        (document-hash (buff 32))
+        (proposal-id uint)
+        (approver principal)
+    )
+    (default-to false
+        (get approved
+            (map-get? document-approvals {
+                refugee-id: refugee-id,
+                document-hash: document-hash,
+                proposal-id: proposal-id,
+                approver: approver,
+            })
+        ))
+)
+
+(define-read-only (get-approval-threshold)
+    (var-get min-approvals-required)
+)
