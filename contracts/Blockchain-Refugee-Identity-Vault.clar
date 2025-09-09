@@ -749,3 +749,211 @@
 (define-read-only (get-approval-threshold)
     (var-get min-approvals-required)
 )
+(define-constant err-biometric-exists (err u110))
+(define-constant err-biometric-not-found (err u111))
+(define-constant err-biometric-mismatch (err u112))
+(define-constant err-biometric-expired (err u113))
+
+(define-map biometric-data
+    {
+        refugee-id: uint,
+        biometric-type: (string-ascii 20),
+    }
+    {
+        data-hash: (buff 32),
+        registered-at: uint,
+        expires-at: uint,
+        verified: bool,
+        registered-by: principal,
+    }
+)
+
+(define-map biometric-requirements
+    { biometric-type: (string-ascii 20) }
+    { required: bool }
+)
+
+(define-map authorized-biometric-officers
+    { officer: principal }
+    { active: bool }
+)
+
+(define-public (register-biometric
+        (refugee-id uint)
+        (biometric-type (string-ascii 20))
+        (data-hash (buff 32))
+        (validity-period uint)
+    )
+    (let (
+            (current-height burn-block-height)
+            (expiry-date (+ current-height validity-period))
+        )
+        (asserts! (is-biometric-officer tx-sender) err-unauthorized)
+        (asserts!
+            (is-none (map-get? biometric-data {
+                refugee-id: refugee-id,
+                biometric-type: biometric-type,
+            }))
+            err-biometric-exists
+        )
+        (asserts! (> validity-period u0) err-invalid-date)
+        (ok (map-set biometric-data {
+            refugee-id: refugee-id,
+            biometric-type: biometric-type,
+        } {
+            data-hash: data-hash,
+            registered-at: current-height,
+            expires-at: expiry-date,
+            verified: false,
+            registered-by: tx-sender,
+        }))
+    )
+)
+
+(define-public (verify-biometric
+        (refugee-id uint)
+        (biometric-type (string-ascii 20))
+        (provided-hash (buff 32))
+    )
+    (let (
+            (stored-biometric (unwrap!
+                (map-get? biometric-data {
+                    refugee-id: refugee-id,
+                    biometric-type: biometric-type,
+                })
+                err-biometric-not-found
+            ))
+            (current-height burn-block-height)
+        )
+        (asserts! (is-biometric-officer tx-sender) err-unauthorized)
+        (asserts! (< current-height (get expires-at stored-biometric))
+            err-biometric-expired
+        )
+        (asserts! (is-eq (get data-hash stored-biometric) provided-hash)
+            err-biometric-mismatch
+        )
+        (ok (map-set biometric-data {
+            refugee-id: refugee-id,
+            biometric-type: biometric-type,
+        }
+            (merge stored-biometric { verified: true })
+        ))
+    )
+)
+
+(define-public (update-biometric
+        (refugee-id uint)
+        (biometric-type (string-ascii 20))
+        (new-data-hash (buff 32))
+        (validity-period uint)
+    )
+    (let (
+            (existing-biometric (unwrap!
+                (map-get? biometric-data {
+                    refugee-id: refugee-id,
+                    biometric-type: biometric-type,
+                })
+                err-biometric-not-found
+            ))
+            (current-height burn-block-height)
+            (expiry-date (+ current-height validity-period))
+        )
+        (asserts! (is-biometric-officer tx-sender) err-unauthorized)
+        (asserts! (> validity-period u0) err-invalid-date)
+        (ok (map-set biometric-data {
+            refugee-id: refugee-id,
+            biometric-type: biometric-type,
+        } {
+            data-hash: new-data-hash,
+            registered-at: current-height,
+            expires-at: expiry-date,
+            verified: false,
+            registered-by: tx-sender,
+        }))
+    )
+)
+
+(define-public (revoke-biometric
+        (refugee-id uint)
+        (biometric-type (string-ascii 20))
+    )
+    (let ((existing-biometric (unwrap!
+            (map-get? biometric-data {
+                refugee-id: refugee-id,
+                biometric-type: biometric-type,
+            })
+            err-biometric-not-found
+        )))
+        (asserts! (is-eq tx-sender (var-get admin)) err-owner-only)
+        (ok (map-delete biometric-data {
+            refugee-id: refugee-id,
+            biometric-type: biometric-type,
+        }))
+    )
+)
+
+(define-public (set-biometric-requirement
+        (biometric-type (string-ascii 20))
+        (required bool)
+    )
+    (begin
+        (asserts! (is-eq tx-sender (var-get admin)) err-owner-only)
+        (ok (map-set biometric-requirements { biometric-type: biometric-type } { required: required }))
+    )
+)
+
+(define-public (add-biometric-officer (officer principal))
+    (begin
+        (asserts! (is-eq tx-sender (var-get admin)) err-owner-only)
+        (ok (map-set authorized-biometric-officers { officer: officer } { active: true }))
+    )
+)
+
+(define-public (remove-biometric-officer (officer principal))
+    (begin
+        (asserts! (is-eq tx-sender (var-get admin)) err-owner-only)
+        (ok (map-set authorized-biometric-officers { officer: officer } { active: false }))
+    )
+)
+
+(define-read-only (get-biometric-info
+        (refugee-id uint)
+        (biometric-type (string-ascii 20))
+    )
+    (map-get? biometric-data {
+        refugee-id: refugee-id,
+        biometric-type: biometric-type,
+    })
+)
+
+(define-read-only (is-biometric-valid
+        (refugee-id uint)
+        (biometric-type (string-ascii 20))
+    )
+    (let ((biometric-info (map-get? biometric-data {
+            refugee-id: refugee-id,
+            biometric-type: biometric-type,
+        })))
+        (match biometric-info
+            bio (and
+                (get verified bio)
+                (< burn-block-height (get expires-at bio))
+            )
+            false
+        )
+    )
+)
+
+(define-read-only (is-biometric-required (biometric-type (string-ascii 20)))
+    (default-to false
+        (get required
+            (map-get? biometric-requirements { biometric-type: biometric-type })
+        ))
+)
+
+(define-read-only (is-biometric-officer (principal principal))
+    (default-to false
+        (get active
+            (map-get? authorized-biometric-officers { officer: principal })
+        ))
+)
