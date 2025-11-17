@@ -957,3 +957,17 @@
             (map-get? authorized-biometric-officers { officer: principal })
         ))
 )
+
+(define-read-only (get-actor-roles (who principal))
+    {
+        admin: (is-eq who (var-get admin)),
+        verifier: (is-verifier who),
+        responder: (is-responder who),
+        issuer: (is-issuer who),
+        biometric-officer: (is-biometric-officer who),
+    }
+)
+
+(define-read-only (get-my-roles)
+    (get-actor-roles tx-sender)
+)
